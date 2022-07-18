@@ -219,18 +219,51 @@ pub fn draw_predictions(img: &mut core::Mat, detections: &Detections) -> opencv:
     Ok(out_vector.to_vec())
 }
 
+
+pub fn load_model() -> Result<Model, Box<dyn Error>> {
+
+    let model_config = load_model_from_config().unwrap();
+
+    let model = dnn::read_net_from_onnx(&model_config.model_path);
+
+    let mut model = match model {
+        Ok(model) => model,
+        Err(_) => {println!("Invalid ONNX model. Check out https://github.com/ultralytics/yolov5/issues/251"); std::process::exit(0)}
+    };
+    model.set_preferable_backend(dnn::DNN_BACKEND_OPENCV)?;
+
+    Ok(Model{model, model_config})
+
+} 
+
 /// Load model configuration.
 /// See ModelConfig.
-pub fn load_model_from_config() -> Result<ModelConfig, Box<dyn Error>>{
+fn load_model_from_config() -> Result<ModelConfig, Box<dyn Error>>{
 
-    let file = File::open("data/config.json")?;
+    let file = File::open("data/config.json");
+
+    let file = match file {
+        Ok(file) => file,
+        Err(_) => {println!("data/config.json does NOT exist."); std::process::exit(0)}
+    };
+
     let reader = BufReader::new(file);
 
-    let j : ModelConfig = serde_json::from_reader(reader)?;
+    let model_config : std::result::Result<ModelConfig, serde_json::Error> = serde_json::from_reader(reader);
 
-    println!("{model_path}", model_path=j.model_path);
+    let model_config = match model_config {
+        Ok(model_config) => model_config,
+        Err(_) => {println!("Malformed JSON. Check out the doc!"); std::process::exit(0)}
+    };
 
-    Ok(j)
+    if !std::path::Path::new(&model_config.model_path).exists() {
+        println!("ONNX model in {model_path} does NOT exist.", model_path=model_config.model_path); 
+        std::process::exit(0)
+    }
+
+    println!("{model_path}", model_path=model_config.model_path);
+
+    Ok(model_config)
 }
 
 /// Porting of letterbox padding strategy used to prepare the input image. 
