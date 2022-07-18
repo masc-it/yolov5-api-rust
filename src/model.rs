@@ -1,10 +1,6 @@
 use opencv::{
-    core::{self, Size, ElemMul},
-    highgui,
-    prelude::*,
-    videoio,
-    dnn,
-    imgcodecs
+    core::{self, MatTraitConst, MatTrait, MatExprTraitConst},
+    dnn::{self, NetTraitConst, NetTrait}
 };
 use std::{fs::File, io::{BufReader}, error::Error};
 
@@ -16,8 +12,6 @@ pub struct PadInfo {
     pub left: i32
 
 }
-
-
 
 pub struct DetectionOuput {
 
@@ -61,10 +55,7 @@ pub fn detect(model_data: &mut Model, img: &core::Mat) -> opencv::Result<()> {
     let model = &mut model_data.model;
 
     let model_config = &mut model_data.model_config;
-    println!("Loaded model");
-
-    
-    println!("mat copy");
+   
     let mat_copy = img.clone();
 
     // letterbox
@@ -75,22 +66,19 @@ pub fn detect(model_data: &mut Model, img: &core::Mat) -> opencv::Result<()> {
 
     // dnn blob
 
-    let blob = opencv::dnn::blob_from_image(&padded_mat, 1.0 / 255.0, opencv::core::Size_{width: 1280, height: 1280}, core::Scalar::new(0f64,0f64,0f64,0f64), true, false, core::CV_32F)?;
-
-    println!("Blob");
+    let blob = opencv::dnn::blob_from_image(&padded_mat, 1.0 / 255.0, opencv::core::Size_{width: model_config.input_size, height: model_config.input_size}, core::Scalar::new(0f64,0f64,0f64,0f64), true, false, core::CV_32F)?;
 
     let out_layer_names = model.get_unconnected_out_layers_names()?;
 
-    
     let mut outs : opencv::core::Vector<core::Mat> = opencv::core::Vector::default();
     model.set_input(&blob, "", 1.0, core::Scalar::default())?;
     
     model.forward(&mut outs, &out_layer_names)?;
 
-    let detection_output = post_process(&padded_mat, &outs,0.5, 0.5)?;
+    let detection_output = post_process(&outs,0.5, 0.5)?;
 
     draw_predictions(&mut pad_info.mat.clone(), &detection_output)?;
-    println!("Forward pass OK");
+    
     
     Ok(())
 }
@@ -118,13 +106,6 @@ fn letterbox( img: &core::Mat, new_shape: core::Size, scale_up: bool) -> opencv:
     let mut dst = core::Mat::default();
     opencv::imgproc::resize(&img, &mut dst, core::Size_{width: new_unpad_w, height: new_unpad_h}, 0.0, 0.0, opencv::imgproc::INTER_LINEAR)?;
 
-    println!("dst");
-    let mw = dst.cols();
-
-    let mh = dst.rows();
-    
-    println!("{mh} - {mw}");
-
     let top =  (dh as f32 - 0.1).round() as i32;
     let bottom =  (dh as f32 + 0.1).round() as i32;
     let left =  (dw as f32 - 0.1).round() as i32;
@@ -135,13 +116,7 @@ fn letterbox( img: &core::Mat, new_shape: core::Size, scale_up: bool) -> opencv:
     
     //let params: core::Vector<i32> = core::Vector::default();
     
-    //opencv::imgcodecs::imwrite("lol.jpg", &final_mat, &params)?;
-    println!("final");
-    let mw = final_mat.cols();
-
-    let mh = final_mat.rows();
-    
-    println!("{mh} - {mw}");
+    //opencv::imgcodecs::imwrite("padded.jpg", &final_mat, &params)?;
     
     Ok(PadInfo{mat: final_mat, top: top, left: left})
 }
@@ -150,13 +125,13 @@ fn letterbox( img: &core::Mat, new_shape: core::Size, scale_up: bool) -> opencv:
 use std::os::raw::c_void;
 
 
-fn post_process(img: &core::Mat, outs: &core::Vector<core::Mat>, conf_thresh: f32, nms_thresh: f32 ) -> opencv::Result<DetectionOuput>{
+fn post_process(outs: &core::Vector<core::Mat>, conf_thresh: f32, nms_thresh: f32 ) -> opencv::Result<DetectionOuput>{
 
     
     let mut det = outs.get(0)?;
 
-    let rows = det.mat_size().get(1)?;
-    let cols = det.mat_size().get(2)?;
+    let rows = *det.mat_size().get(1).unwrap();
+    let cols = *det.mat_size().get(2).unwrap();
     
     let mut boxes: core::Vector<opencv::core::Rect> = core::Vector::new();
     let mut scores: core::Vector<f32> = core::Vector::new();
@@ -181,36 +156,31 @@ fn post_process(img: &core::Mat, outs: &core::Vector<core::Mat>, conf_thresh: f3
             let sc: &f32 = m.at_2d::<f32>(r, 4)?;
             
             let score = *sc as f64;
-            //println!("score");
+
             let confs = m.row(r)?.col_range( &core::Range::new(5, m.row(r)?.cols())?)?;
             
             let c = (confs * score).into_result()?.to_mat()?;
             
-            //let c = confs.mul(&ones, score)?;
-        
             let mut min_val = Some(0f64);
             let mut max_val = Some(0f64);
 
             let mut min_loc  = Some(core::Point::default());
             let mut max_loc  = Some(core::Point::default());
             let mut idk = core::no_array();
-            //println!("ok 1");
+
+            // find predicted class with highest confidence
             core::min_max_loc(&c, min_val.as_mut(), max_val.as_mut(), min_loc.as_mut(), max_loc.as_mut(), &mut idk)?;
+            
             scores.push(max_val.unwrap() as f32 );
-            //println!("ok 2");
-            
             boxes.push( core::Rect{x: ((*cx) - (*w) / 2.0).round() as i32, y: ((*cy) - (*h) / 2.0).round() as i32, width: *w as i32, height: *h as i32} );
-            
             indices.push(r);
             
             class_index_list.push(max_loc.unwrap().x);
-            //println!("ok 3");
 
-           // println!("ok nms");
         }
 
     }
-    dnn::nms_boxes(&boxes, &scores, 0.5, 0.45, &mut indices, 1.0, 0)?;
+    dnn::nms_boxes(&boxes, &scores, conf_thresh, nms_thresh, &mut indices, 1.0, 0)?;
     let mut indxs : Vec<i32> = Vec::new();
     for i in &indices {
         indxs.push(class_index_list.get(i as usize)?);
