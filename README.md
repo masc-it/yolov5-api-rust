@@ -23,7 +23,7 @@ A dummy example is available in the _data/_ folder
 
 ## Docker
 
-Soon.
+    docker run --name rust-yolov5-api -v <model data dir>:/app/data -p 5000:5000 mascit/rust-yolov5-api:latest
 
 ## Build
 

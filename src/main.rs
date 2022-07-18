@@ -1,13 +1,11 @@
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::error::Error;
 use std::sync::Mutex;
 
 use model::Model;
-use opencv::{
-    dnn
-};
-use opencv::prelude::{NetTrait};
+use opencv::dnn;
+use opencv::prelude::NetTrait;
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder, HttpRequest};
 
 mod model;
