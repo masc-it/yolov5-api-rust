@@ -2,6 +2,7 @@
 
 API to run inferences with YoloV5 models. Written in Rust, based on OpenCV 4.5.5
 
+If you need a C++ version, check my [C++ Yolov5-API](https://github.com/masc-it/yolov5-api-cpp)
 
 ## Setup
 
