@@ -4,12 +4,12 @@ use opencv::{
 };
 use std::{fs::File, io::{BufReader}, error::Error};
 
-use serde::{Deserialize};
+use serde::{Deserialize, Serialize};
 pub struct PadInfo {
 
     pub mat: core::Mat,
-    pub top: i32,
-    pub left: i32
+    pub orig_width: i32,
+    pub orig_height: i32
 
 }
 
@@ -21,6 +21,26 @@ pub struct DetectionOuput {
     pub indices: core::Vector<i32>,
 
     pub class_index_list: Vec<i32>
+}
+
+
+#[derive(Serialize, Deserialize)]
+pub struct BoxDetection {
+
+    pub xmin: i32,
+    pub ymin: i32,
+    pub xmax: i32,
+    pub ymax: i32,
+
+    pub class: i32,
+    pub conf: f32
+
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Detections {
+
+    pub detections: Vec<BoxDetection>
 }
 
 #[derive(Deserialize)]
@@ -49,20 +69,34 @@ pub fn load_model_from_config() -> Result<ModelConfig, Box<dyn Error>>{
     Ok(j)
 }
 
+pub struct MatInfo {
 
-pub fn detect(model_data: &mut Model, img: &core::Mat) -> opencv::Result<()> {
+    width: f32,
+    height: f32,
+
+    scaled_size: f32
+}
+
+pub fn detect(model_data: &mut Model, img: &core::Mat, conf_thresh: f32, nms_thresh: f32) -> opencv::Result<Detections> {
     
     let model = &mut model_data.model;
 
     let model_config = &mut model_data.model_config;
    
-    let mat_copy = img.clone();
+    //let mat_copy = img.clone();
+
+    let mat_info = MatInfo{
+        width: img.cols() as f32,
+        height: img.rows() as f32,
+
+        scaled_size: model_config.input_size as f32
+    };
 
     // letterbox
 
-    let pad_info = letterbox(&mat_copy, core::Size::new(model_config.input_size, model_config.input_size), true)?;
+    //let pad_info = letterbox(&mat_copy, core::Size::new(model_config.input_size, model_config.input_size), true)?;
 
-    let padded_mat = pad_info.mat.clone();
+    let padded_mat = prepare_input(&img).unwrap(); //pad_info.mat.clone();
 
     // dnn blob
 
@@ -75,12 +109,27 @@ pub fn detect(model_data: &mut Model, img: &core::Mat) -> opencv::Result<()> {
     
     model.forward(&mut outs, &out_layer_names)?;
 
-    let detection_output = post_process(&outs,0.5, 0.5)?;
+    let detections = post_process(&outs, &mat_info, conf_thresh, nms_thresh)?;
 
-    draw_predictions(&mut pad_info.mat.clone(), &detection_output)?;
     
+    draw_predictions(&mut img.clone(), &detections)?;
     
-    Ok(())
+    Ok(detections)
+}
+
+fn prepare_input(img: &core::Mat) -> opencv::Result<core::Mat> {
+
+    let width = img.cols();
+    let height = img.rows();
+
+    let _max = std::cmp::max(width, height);
+
+    let mut result = opencv::core::Mat::zeros(_max, _max, opencv::core::CV_8UC3).unwrap().to_mat().unwrap();
+
+    img.copy_to(&mut result)?;
+
+    Ok(result)
+
 }
 
 fn letterbox( img: &core::Mat, new_shape: core::Size, scale_up: bool) -> opencv::Result<PadInfo> {
@@ -118,14 +167,14 @@ fn letterbox( img: &core::Mat, new_shape: core::Size, scale_up: bool) -> opencv:
     
     //opencv::imgcodecs::imwrite("padded.jpg", &final_mat, &params)?;
     
-    Ok(PadInfo{mat: final_mat, top: top, left: left})
+    Ok(PadInfo{mat: final_mat, orig_width: width as i32, orig_height: height as i32})
 }
 
 
 use std::os::raw::c_void;
 
 
-fn post_process(outs: &core::Vector<core::Mat>, conf_thresh: f32, nms_thresh: f32 ) -> opencv::Result<DetectionOuput>{
+fn post_process(outs: &core::Vector<core::Mat>, mat_info: &MatInfo, conf_thresh: f32, nms_thresh: f32 ) -> opencv::Result<Detections>{
 
     
     let mut det = outs.get(0)?;
@@ -133,12 +182,15 @@ fn post_process(outs: &core::Vector<core::Mat>, conf_thresh: f32, nms_thresh: f3
     let rows = *det.mat_size().get(1).unwrap();
     let cols = *det.mat_size().get(2).unwrap();
     
-    let mut boxes: core::Vector<opencv::core::Rect> = core::Vector::new();
-    let mut scores: core::Vector<f32> = core::Vector::new();
+    let mut boxes: core::Vector<opencv::core::Rect> = core::Vector::default();
+    let mut scores: core::Vector<f32> = core::Vector::default();
 
-    let mut indices: core::Vector<i32> = core::Vector::new();
+    let mut indices: core::Vector<i32> = core::Vector::default();
 
-    let mut class_index_list: core::Vector<i32> = core::Vector::new();
+    let mut class_index_list: core::Vector<i32> = core::Vector::default();
+
+    let x_factor = mat_info.width / mat_info.scaled_size;
+    let y_factor = mat_info.height / mat_info.scaled_size;
 
     unsafe {
       
@@ -157,6 +209,9 @@ fn post_process(outs: &core::Vector<core::Mat>, conf_thresh: f32, nms_thresh: f3
             
             let score = *sc as f64;
 
+            if score < conf_thresh.into() {
+                continue;
+            }
             let confs = m.row(r)?.col_range( &core::Range::new(5, m.row(r)?.cols())?)?;
             
             let c = (confs * score).into_result()?.to_mat()?;
@@ -172,7 +227,12 @@ fn post_process(outs: &core::Vector<core::Mat>, conf_thresh: f32, nms_thresh: f3
             core::min_max_loc(&c, min_val.as_mut(), max_val.as_mut(), min_loc.as_mut(), max_loc.as_mut(), &mut idk)?;
             
             scores.push(max_val.unwrap() as f32 );
-            boxes.push( core::Rect{x: ((*cx) - (*w) / 2.0).round() as i32, y: ((*cy) - (*h) / 2.0).round() as i32, width: *w as i32, height: *h as i32} );
+            boxes.push( core::Rect{
+                x: (((*cx) - (*w) / 2.0) * x_factor).round() as i32, 
+                y: (((*cy) - (*h) / 2.0) * y_factor).round() as i32, 
+                width: (*w * x_factor).round() as i32, 
+                height: (*h * y_factor).round() as i32
+            } );
             indices.push(r);
             
             class_index_list.push(max_loc.unwrap().x);
@@ -181,33 +241,45 @@ fn post_process(outs: &core::Vector<core::Mat>, conf_thresh: f32, nms_thresh: f3
 
     }
     dnn::nms_boxes(&boxes, &scores, conf_thresh, nms_thresh, &mut indices, 1.0, 0)?;
-    let mut indxs : Vec<i32> = Vec::new();
+    //let mut indxs : Vec<i32> = Vec::new();
+    
+    let mut final_boxes : Vec<BoxDetection> = Vec::default();
+    
     for i in &indices {
-        indxs.push(class_index_list.get(i as usize)?);
+
+        let indx = i as usize;
+
+        let class = class_index_list.get(indx)?;
+        //indxs.push(class_index_list.get(indx)?);
+        
+        let rect = boxes.get(indx)?;
+
+        let bbox = BoxDetection{
+            xmin: rect.x,
+            ymin: rect.y,
+
+            xmax: rect.x + rect.width,
+            ymax: rect.y + rect.height,
+            conf: scores.get(indx)?,
+            class: class
+        };
+
+        final_boxes.push(bbox);
     }
 
-    Ok(DetectionOuput{
-        boxes: boxes,
-        scores: scores,
-        indices: indices,
-        class_index_list: indxs
-    })
+    Ok(Detections{detections: final_boxes})
 
 }
 
 
-fn draw_predictions(img: &mut core::Mat, detection_output: &DetectionOuput) -> opencv::Result<()> {
+pub fn draw_predictions(img: &mut core::Mat, detections: &Detections) -> opencv::Result<Vec<u8>> {
 
-    let boxes = &detection_output.boxes;
-    let scores = &detection_output.scores;
-    let indices = &detection_output.indices;
-    let class_index_list = &detection_output.class_index_list;
+    let boxes = &detections.detections;
+    for i in 0..boxes.len() {
 
-    let l = indices.len();
-    println!("Num detections: {l}");
-    for i in 0..indices.len() {
-        let rect = boxes.get(indices.get(i)? as usize)?;
-
+        let bbox = &boxes[i];
+        let rect = opencv::core::Rect::new(bbox.xmin, bbox.ymin, bbox.xmax - bbox.xmin, bbox.ymax - bbox.ymin);
+        
         let label = "A";
 
         let color = core::Scalar::all(0.0);
@@ -215,6 +287,10 @@ fn draw_predictions(img: &mut core::Mat, detection_output: &DetectionOuput) -> o
         opencv::imgproc::rectangle(img, rect, color, 1, opencv::imgproc::LINE_8, 0)?;
     }
 
+    let mut out_vector :core::Vector<u8>  = core::Vector::default();
+    opencv::imgcodecs::imencode(".jpg", img, &mut out_vector, &core::Vector::default()).unwrap();
+
+
     opencv::imgcodecs::imwrite("boxes.jpg", img, &core::Vector::default())?;
-    Ok(())
+    Ok(out_vector.to_vec())
 }
