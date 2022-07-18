@@ -6,7 +6,9 @@ use opencv::{
     dnn,
     imgcodecs
 };
+use std::{fs::File, io::{BufReader}, error::Error};
 
+use serde::{Deserialize};
 pub struct PadInfo {
 
     pub mat: core::Mat,
@@ -27,8 +29,73 @@ pub struct DetectionOuput {
     pub class_index_list: Vec<i32>
 }
 
+#[derive(Deserialize)]
+pub struct ModelConfig {
 
-pub fn letterbox( img: &core::Mat, new_shape: core::Size, scale_up: bool) -> opencv::Result<PadInfo> {
+    pub model_path : String,
+    pub class_names : Vec<String>,
+    pub input_size: i32
+}
+
+pub struct Model {
+
+    pub model: dnn::Net,
+    pub model_config: ModelConfig
+}
+
+pub fn load_model_from_config() -> Result<ModelConfig, Box<dyn Error>>{
+
+    let file = File::open("data/config.json")?;
+    let reader = BufReader::new(file);
+
+    let j : ModelConfig = serde_json::from_reader(reader)?;
+
+    println!("{model_path}", model_path=j.model_path);
+
+    Ok(j)
+}
+
+
+pub fn detect(model_data: &mut Model, img: &core::Mat) -> opencv::Result<()> {
+    
+    let model = &mut model_data.model;
+
+    let model_config = &mut model_data.model_config;
+    println!("Loaded model");
+
+    
+    println!("mat copy");
+    let mat_copy = img.clone();
+
+    // letterbox
+
+    let pad_info = letterbox(&mat_copy, core::Size::new(model_config.input_size, model_config.input_size), true)?;
+
+    let padded_mat = pad_info.mat.clone();
+
+    // dnn blob
+
+    let blob = opencv::dnn::blob_from_image(&padded_mat, 1.0 / 255.0, opencv::core::Size_{width: 1280, height: 1280}, core::Scalar::new(0f64,0f64,0f64,0f64), true, false, core::CV_32F)?;
+
+    println!("Blob");
+
+    let out_layer_names = model.get_unconnected_out_layers_names()?;
+
+    
+    let mut outs : opencv::core::Vector<core::Mat> = opencv::core::Vector::default();
+    model.set_input(&blob, "", 1.0, core::Scalar::default())?;
+    
+    model.forward(&mut outs, &out_layer_names)?;
+
+    let detection_output = post_process(&padded_mat, &outs,0.5, 0.5)?;
+
+    draw_predictions(&mut pad_info.mat.clone(), &detection_output)?;
+    println!("Forward pass OK");
+    
+    Ok(())
+}
+
+fn letterbox( img: &core::Mat, new_shape: core::Size, scale_up: bool) -> opencv::Result<PadInfo> {
 
 
     let width = img.cols() as f32;
@@ -83,7 +150,7 @@ pub fn letterbox( img: &core::Mat, new_shape: core::Size, scale_up: bool) -> ope
 use std::os::raw::c_void;
 
 
-pub fn post_process(img: &core::Mat, outs: &core::Vector<core::Mat>, conf_thresh: f32, nms_thresh: f32 ) -> opencv::Result<(DetectionOuput)>{
+fn post_process(img: &core::Mat, outs: &core::Vector<core::Mat>, conf_thresh: f32, nms_thresh: f32 ) -> opencv::Result<DetectionOuput>{
 
     
     let mut det = outs.get(0)?;
@@ -159,7 +226,7 @@ pub fn post_process(img: &core::Mat, outs: &core::Vector<core::Mat>, conf_thresh
 }
 
 
-pub fn draw_predictions(img: &mut core::Mat, detection_output: &DetectionOuput) -> opencv::Result<()> {
+fn draw_predictions(img: &mut core::Mat, detection_output: &DetectionOuput) -> opencv::Result<()> {
 
     let boxes = &detection_output.boxes;
     let scores = &detection_output.scores;
