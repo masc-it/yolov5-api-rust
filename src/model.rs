@@ -118,7 +118,14 @@ fn post_process(outs: &core::Vector<core::Mat>, mat_info: &MatInfo, conf_thresh:
     let y_factor = mat_info.height / mat_info.scaled_size;
 
     unsafe {
-      
+        
+        let mut min_val = Some(0f64);
+        let mut max_val = Some(0f64);
+
+        let mut min_loc  = Some(core::Point::default());
+        let mut max_loc  = Some(core::Point::default());
+        let mut mask = core::no_array();
+            
         let data = det.ptr_mut(0)?.cast::<c_void>();
 
         // safe alternative needed..
@@ -141,17 +148,12 @@ fn post_process(outs: &core::Vector<core::Mat>, mat_info: &MatInfo, conf_thresh:
             
             let c = (confs * score).into_result()?.to_mat()?;
             
-            let mut min_val = Some(0f64);
-            let mut max_val = Some(0f64);
-
-            let mut min_loc  = Some(core::Point::default());
-            let mut max_loc  = Some(core::Point::default());
-            let mut idk = core::no_array();
-
             // find predicted class with highest confidence
-            core::min_max_loc(&c, min_val.as_mut(), max_val.as_mut(), min_loc.as_mut(), max_loc.as_mut(), &mut idk)?;
+            core::min_max_loc(&c, min_val.as_mut(), max_val.as_mut(), min_loc.as_mut(), max_loc.as_mut(), &mut mask)?;
             
             scores.push(max_val.unwrap() as f32);
+            class_index_list.push(max_loc.unwrap().x);
+
             boxes.push( core::Rect{
                 x: (((*cx) - (*w) / 2.0) * x_factor).round() as i32, 
                 y: (((*cy) - (*h) / 2.0) * y_factor).round() as i32, 
@@ -159,8 +161,6 @@ fn post_process(outs: &core::Vector<core::Mat>, mat_info: &MatInfo, conf_thresh:
                 height: (*h * y_factor).round() as i32
             } );
             indices.push(r);
-
-            class_index_list.push(max_loc.unwrap().x);
 
         }
 
@@ -197,20 +197,26 @@ fn post_process(outs: &core::Vector<core::Mat>, mat_info: &MatInfo, conf_thresh:
 
 
 /// Draw predicted bounding boxes.
-pub fn draw_predictions(img: &mut core::Mat, detections: &Detections) -> opencv::Result<Vec<u8>> {
+pub fn draw_predictions(img: &mut core::Mat, detections: &Detections, model_config: &ModelConfig) -> opencv::Result<Vec<u8>> {
 
     let boxes = &detections.detections;
+    let bg_color = core::Scalar::all(255.0);
+    let text_color = core::Scalar::all(0.0);
+
     for i in 0..boxes.len() {
 
         let bbox = &boxes[i];
         let rect = opencv::core::Rect::new(bbox.xmin, bbox.ymin, bbox.xmax - bbox.xmin, bbox.ymax - bbox.ymin);
         
-        // TODO draw labels
-        //let label = "A";
+        let label = model_config.class_names.get(bbox.class as usize).unwrap();
 
-        let color = core::Scalar::all(0.0);
+        opencv::imgproc::rectangle(img, rect, bg_color, 1, opencv::imgproc::LINE_8, 0)?;
 
-        opencv::imgproc::rectangle(img, rect, color, 1, opencv::imgproc::LINE_8, 0)?;
+        // draw text box above bbox
+        let text_size = opencv::imgproc::get_text_size(&label, opencv::imgproc::FONT_HERSHEY_SIMPLEX, 0.6, 1, &mut 0).unwrap();
+        opencv::imgproc::rectangle(img, core::Rect{x: rect.x, y: std::cmp::max(0, rect.y - text_size.height - 2), width: rect.width, height: text_size.height + 2}, bg_color, -1, opencv::imgproc::LINE_8, 0)?;
+        opencv::imgproc::put_text(img, &label, core::Point{x: rect.x, y: std::cmp::max(0,rect.y - 2)}, opencv::imgproc::FONT_HERSHEY_SIMPLEX, 0.6, text_color, 1, opencv::imgproc::LINE_AA, false).unwrap()
+
     }
 
     let mut out_vector :core::Vector<u8>  = core::Vector::default();

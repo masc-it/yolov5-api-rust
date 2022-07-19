@@ -24,7 +24,8 @@ async fn predict(data: web::Data<AppState>, req: HttpRequest, req_body: web::Byt
     let conf_thresh = req.headers().get("X-Confidence-Thresh")
         .map_or_else(|| 0.5, 
             |f| f.to_str().unwrap().parse::<f32>().map_or(0.5, |v| v));
-    
+
+
     let nms_thresh = req.headers().get("X-NMS-Thresh")
         .map_or_else(|| 0.5, 
             |f| f.to_str().unwrap().parse::<f32>().map_or(0.5, |v| v));
@@ -47,6 +48,7 @@ async fn predict(data: web::Data<AppState>, req: HttpRequest, req_body: web::Byt
             .append_header(("Content-Type", "application/json"))
             .body("{\"msg\": \"Invalid image.\"}")
     } 
+
     let detections = detections.unwrap();
     let duration = start.elapsed();
     if return_type.eq("json") {
@@ -57,7 +59,7 @@ async fn predict(data: web::Data<AppState>, req: HttpRequest, req_body: web::Byt
             .body(json_response)
     } else {
 
-        let img_with_boxes_bytes = model::draw_predictions(&mut mat, &detections).unwrap();
+        let img_with_boxes_bytes = model::draw_predictions(&mut mat, &detections, &model.model_config).unwrap();
 
         HttpResponse::Ok()
             .append_header(("X-Duration", duration.as_millis().to_string()))
