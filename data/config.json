@@ -1,0 +1,7 @@
+{
+
+  "model_path": "your-model.onnx",
+  "input_size": 1280,
+  "class_names": ["Class 1", "Class 2", "Class 3"]
+
+}
